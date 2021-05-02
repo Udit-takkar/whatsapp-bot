@@ -1,40 +1,45 @@
+// To-Do :- Assignments Deadlines
+
+//  track assignment deadlines.
+
 const wa = require("@open-wa/wa-automate");
 const { create, decryptMedia, ev } = wa;
 const { default: PQueue } = require("p-queue");
 const fs = require("fs");
 const express = require("express");
-const axios = require("axios").default;
+const axios = require("axios");
 
 const helpOnInPM = ["hello", "hi", "hii", "hey", "heyy", "#help", "#menu"];
 const helpOnInGroup = ["#help", "#menu"];
+const stoicapi = require("./stoicapi.json");
 
 const helpText =
   process.env.HELP_TEXT ||
   `Commands:
-#sticker: write in caption of a image/video/gif to turn it into sticker
+#attendance : Tag everyone for Attendance Roll call  
+
+#pending : displays all pending tasks with deadlines
+
+#randomquote : generates random stoic quote
+
 #spam: tag everyone in a message in a group (only works in a group)
+
 #join https://chat.whatsapp.com/shdkashdh: joing a group with invite link
+
 #leave: i hope you dont use this (only works in a group if sent by an admin)
-#help: to recive this same message
-#menu: same as help but some people prefer it
-#run languages: Returns all languages supported
-#run {language}
-{code}: Run some code in some language
-eg.
-'#run node
-console.log('hello world');'
+
+#help:to display commands
+#menu:to display commands
 
 Add '#nospam' in group description to stop spam commands
-All commands except #spam & #leave work in pm
-Made by: pathetic_geek (https://github.com/patheticGeek)
+
+Made with ❤️ By Udit Takkar (https://github.com/Udit-takkar)
 `;
 
-const leaveText =
-  process.env.LEAVE_TEXT ||
-  "Ab unko humshe rishta nhi rakhna hai\nto humari taraf se bhi koi zabardasti nhi hai";
+const leaveText = process.env.LEAVE_TEXT || "See You Again";
 
 const server = express();
-const PORT = parseInt(process.env.PORT) || 3000;
+const PORT = 8000;
 const queue = new PQueue({
   concurrency: 2,
   autoStart: false,
@@ -50,12 +55,13 @@ let cl = null;
  * @param {import("@open-wa/wa-automate").Message} message
  */
 async function procMess(message) {
+  console.log(message.author, message.content);
   if (message.type === "chat") {
     if (
       message.isGroupMsg &&
       helpOnInGroup.includes(message.body.toLowerCase())
     ) {
-      await cl.sendText(message.from, helpText);
+      await cl.sendText(message.chatId, helpText);
     } else if (
       !message.isGroupMsg &&
       helpOnInPM.includes(message.body.toLowerCase())
@@ -78,37 +84,52 @@ async function procMess(message) {
         )}`;
         await cl.sendTextWithMentions(message.chatId, text);
       }
-    } else if (message.body === "#run languages") {
-      const response = await axios.get(
-        "https://emkc.org/api/v1/piston/versions"
-      );
-      const reply = response.data
-        .map((item) => `${item.name} - v${item.version}`)
-        .join("\n");
-      cl.sendText(message.chatId, reply);
-    } else if (message.body.startsWith("#run ")) {
-      const { chatId, body } = message;
-      try {
-        let msg = body.replace("#run ", "").split("\n");
-        const lang = msg.splice(0, 1)[0];
-        const source = msg.join("\n");
-        const response = await axios.post(
-          "https://emkc.org/api/v1/piston/execute",
-          {
-            language: lang,
-            source: source,
-          }
-        );
-        const { ran, language, output, version, code, message } = response.data;
-        const reply = `${
-          ran ? "Ran" : "Error running"
-        } with ${language} v${version}\nOutput:\n${output}`;
-        cl.sendText(chatId, reply);
-      } catch (e) {
-        console.log(e);
-        cl.sendText(chatId, "Unsupported language");
-      }
+    } else if (
+      message.isGroupMsg &&
+      message.body.toLowerCase() === "#attendance"
+    ) {
+      const text = `Attendance Alert${message.chat.groupMetadata.participants.map(
+        (participant) =>
+          `\n attendance @${
+            typeof participant.id === "string"
+              ? participant.id.split("@")[0]
+              : participant.user
+          }`
+      )}`;
+      await cl.sendTextWithMentions(message.chatId, text);
+    } else if (message.body.startsWith("#randomquote")) {
+      const quote = stoicapi[Math.floor(Math.random() * stoicapi.length)];
+      const quoteMessage = `${quote.quote} \n \t\t\t-${quote.author}`;
+
+      await cl.sendText(message.chatId, quoteMessage);
+    } else if (message.body.toLowerCase() === "#pending") {
+      axios
+        .get("http://localhost:3000/task")
+        .then((res) => {
+          // console.log(res.data);
+
+          const taskList = `Pending Tasks \n ${res.data.map(
+            (task) => ` \n ${task.task}  ${task.deadline}`
+          )}`;
+          cl.sendText(message.chatId, taskList);
+        })
+
+        .catch((err) => {
+          console.log(err);
+        });
+    } else if (message.body.startsWith("#add")) {
+      const messageArray = message.body.split(" ");
+      const task = messageArray[1];
+      const [date, month] = [messageArray[2], messageArray[3]];
+      axios
+        .post("http://localhost:3000/task", {
+          task: task,
+          deadline: `${date}-${month}`,
+        })
+        .then((res) => console.log("success"))
+        .catch(er);
     } else if (message.body.startsWith("#join https://chat.whatsapp.com/")) {
+      //add quote here
       await cl.joinGroupViaLink(message.body);
       await cl.reply(message.chatId, "Joined group", message.id);
     } else if (message.body.toLowerCase() === "#nospam") {
@@ -128,22 +149,8 @@ async function procMess(message) {
         await cl.reply(message.chatId, "You're not an admin!", message.id);
       }
     }
-  } else if (
-    ["image", "video"].includes(message.type) &&
-    message.caption === "#sticker"
-  ) {
-    await cl.sendText(message.chatId, "Processing sticker");
-    const mediaData = await decryptMedia(message);
-    const dataUrl = `data:${message.mimetype};base64,${mediaData.toString(
-      "base64"
-    )}`;
-    message.type === "image" &&
-      (await cl.sendImageAsSticker(message.chatId, dataUrl, message.id));
-    message.type === "video" &&
-      (await cl.sendMp4AsSticker(message.chatId, dataUrl));
   }
 }
-
 /**
  * Add message to process queue
  */
@@ -163,9 +170,10 @@ const processMessage = (message) =>
 async function start(client) {
   cl = client;
   queue.start();
-  const unreadMessages = await client.getAllUnreadMessages();
-  unreadMessages.forEach(processMessage);
-  client.onMessage(processMessage);
+  // const unreadMessages = await client.getAllNewMessages();
+  // unreadMessages.forEach(processMessage);
+  // client.onMessage(processMessage);
+  client.onAnyMessage((message) => processMessage(message));
 }
 
 ev.on("qr.**", async (qrcode) => {
